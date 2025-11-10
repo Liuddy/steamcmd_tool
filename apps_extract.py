@@ -2,35 +2,40 @@ import concurrent.futures
 import csv
 import os
 import re
-import requests
 import subprocess
 import sys
 import time
+from dotenv import load_dotenv
+import requests
 import vdf
 
 # --- Preliminary steps ---
-# Connect to Steam and extract every licenses you own with the following command line (replace "username" with yours):
-# steamcmd +login username +licenses_print +quit > licenses.txt
+# Connect to Steam and extract every licenses you own with the following command line
+# (replace "username" with yours and change steamcmd.exe path if needed):
+# C:\steamcmd\steamcmd.exe +login username +licenses_print +quit > licenses.txt
 
-cmd_line_batch = 500            # To avoid Windows command line maximum char limit
-cmd_line_delay = 60             # To wait for SteamCMD output (adapt it according to the length of licenses.txt)
-api_calls_delay = 1             # To avoid Steam API calls rate-limit
-max_threads = 5                 # To limit number of workers on multi-thread
-session = requests.Session()    # To not open a new session for each API call
+load_dotenv(override=True)
 
-licenses_file_path = 'licenses.txt'
-all_games_csv_file_path = 'steam_all_games.csv'
-profile_games_csv_file_path = 'steam_profile_games.csv'
-misc_csv_file_path = 'steam_misc.csv'
-family_csv_file_path = 'steam_family.csv'
+CMD_LINE_BATCH = 500            # To avoid Windows command line maximum char limit
+CMD_LINE_DELAY = 60             # To wait for SteamCMD output (adapt it according to the length of licenses.txt)
+API_CALLS_DELAY = 1             # To avoid Steam API calls rate-limit
+MAX_THREADS = 5                 # To limit number of workers on multi-thread
+SESSION = requests.Session()    # To not open a new session for each API call
 
-steam_key = ''              	# Inform here your Steam API key
-steam_id = ''               	# Inform here your Steam profile ID
-steam_api_profile_url = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={steam_key}&steamid={steam_id}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
+LICENSES_FILE_PATH = os.environ['LICENSES_FILE_PATH']
+ALL_GAMES_CSV_FILE_PATH = os.environ['ALL_GAMES_CSV_FILE_PATH']
+PROFILE_GAMES_CSV_FILE_PATH = os.environ['PROFILE_GAMES_CSV_FILE_PATH']
+MISC_CSV_FILE_PATH = os.environ['MISC_CSV_FILE_PATH']
+FAMILY_CSV_FILE_PATH = os.environ['FAMILY_CSV_FILE_PATH']
+
+STEAM_CMD_EXE = os.environ['STEAM_CMD_EXE']
+STEAM_KEY = os.environ['STEAM_KEY']
+STEAM_ID = os.environ['STEAM_ID']
+STEAM_API_PROFILE_URL = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_KEY}&steamid={STEAM_ID}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
 
 # --- Logging configuration ---
-log_file_path = 'logs.txt'
-backlogs_file_path = 'backlogs.txt'
+LOG_FILE_PATH = 'logs.txt'
+BACKLOGS_FILE_PATH = 'backlogs.txt'
 
 class Logger:
     def __init__(self, filename):
@@ -45,16 +50,16 @@ class Logger:
     def flush(self):
         pass    # Trigger immediate writing
 
-sys.stdout = Logger(log_file_path)
+sys.stdout = Logger(LOG_FILE_PATH)
 
 # --- Rename logs.txt to backlogs.txt ---
 def stop_logging():
     try:
         sys.stdout.log.close()
-        if os.path.exists(backlogs_file_path):
-            os.remove(backlogs_file_path)
-        os.rename(log_file_path, backlogs_file_path)
-        sys.__stdout__.write(f'\033[92m\n[INFO] Logs file saved to {backlogs_file_path}.\033[0m')
+        if os.path.exists(BACKLOGS_FILE_PATH):
+            os.remove(BACKLOGS_FILE_PATH)
+        os.rename(LOG_FILE_PATH, BACKLOGS_FILE_PATH)
+        sys.__stdout__.write(f'\033[92m\n[INFO] Logs file saved to {BACKLOGS_FILE_PATH}.\033[0m')
     except Exception as e:
         sys.__stdout__.write(f'\033[91m\n[ERR] Failed to save logs file: {e}\033[0m')
 
@@ -65,10 +70,10 @@ if os.name == 'nt':
 
 # --- App class defining each Steam app ---
 class App:
-    def __init__(self, id, name = None, type = None, price = None, on_store = None, on_profile = None):
-        self.id = id
+    def __init__(self, app_id, name = None, app_type = None, price = None, on_store = None, on_profile = None):
+        self.id = app_id
         self.name = name
-        self.type = type                    # Indicate if it's a game, an app, a DLC, a music, a tool or else.
+        self.type = app_type                # Indicate if it's a game, an app, a DLC, a music, a tool or else.
         self.price = price                  # Indicate if it's a free / paid app or coming from family sharing.
         self.on_store = on_store            # Indicate if it's available on store or not.
         self.on_profile = on_profile        # Indicate if it's listed on Steam profile games or not.
@@ -83,8 +88,8 @@ class App:
 
     def get_type(self):
         return self.type
-    def set_type(self, type):
-        self.type = type
+    def set_type(self, app_type):
+        self.type = app_type
 
     def get_price(self):
         return self.price
@@ -106,7 +111,7 @@ class App:
 def make_app_list():
     apps = []
     saved_apps = {}
-    with open(licenses_file_path, encoding='utf-8') as f:
+    with open(LICENSES_FILE_PATH, encoding='utf-8') as f:
         app_price = None
         for line in f:
             if re.search(r'\bState\b\s*:', line):
@@ -149,7 +154,7 @@ def replace_app_price(apps, app_id, app_price):
 
 # --- Complete the informations of each app by reading previous logs file ---
 def complete_apps_from_backlogs(apps):
-    with open(backlogs_file_path, encoding='utf-8') as f:
+    with open(BACKLOGS_FILE_PATH, encoding='utf-8') as f:
         for line in f:
             if '[DEBUG]' not in line:
                 continue
@@ -168,7 +173,7 @@ def complete_apps_from_backlogs(apps):
                     app.set_on_profile(match_status.group(3) == 'True')
                     print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
                     break
-    print(f'\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
+    print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
 
 
 # --- Complete the name and type of each app using SteamCMD ---
@@ -189,13 +194,13 @@ def complete_apps_name_and_type(apps):
                 app.set_name(app_data.get('name', '[ERROR]'))
                 app.set_type(app_data.get('type', '[ERROR]'))
         print(f'\n[DEBUG] Completed app {app.get_id()}, name: {app.get_name()} | type: {app.get_type()}')
-    print(f'\033[92m\n[INFO] Completed apps name and type.\033[0m')
+    print('\033[92m\n[INFO] Completed apps name and type.\033[0m')
 
 # --- Get and parse CMD output batch per batch for performance ---
 def get_parsed_output(apps):
     vdf_parsed = {}
-    for i in range(0, len(apps), cmd_line_batch):
-        batch_apps = apps[i:i+cmd_line_batch]
+    for i in range(0, len(apps), CMD_LINE_BATCH):
+        batch_apps = apps[i:i+CMD_LINE_BATCH]
         cmd_line = make_cmd_line(batch_apps)
         if not cmd_line:
             print(f'\033[93m\n[WARN] Steam CMD line making failed with i = {i}\033[0m')
@@ -213,7 +218,7 @@ def get_parsed_output(apps):
 
 # --- Make one command line in order to limit subprocesses ---
 def make_cmd_line(apps):
-    cmd_line = ['steamcmd', '+login', 'anonymous']
+    cmd_line = [STEAM_CMD_EXE, '+login', 'anonymous']
     for app in apps:
         cmd_line += ['+app_info_print', str(app.get_id())]
     cmd_line += ['+quit']
@@ -231,7 +236,8 @@ def execute_cmd_line(cmd_line):
             text=True,
             encoding='utf-8',
             errors='ignore',
-            timeout=cmd_line_delay
+            timeout=CMD_LINE_DELAY,
+            check=False
         )
         output = result.stdout
         if not output:
@@ -285,15 +291,15 @@ def parse_output_to_vdf(output):
                 collecting = False
     print(f'\033[92m\n[INFO] CMD output parsed: {len(list(parsed_apps.keys()))} apps parsed to VDF.\033[0m')
     return parsed_apps
-    
+
 
 # --- Complete the store and profile status of each app using multi-threaded calls to Steam API ---
 def complete_apps_status(apps):
     apps_to_do = [app for app in apps if app.is_on_store() == None or app.is_on_profile() == None]
     check_apps_profile_status(apps_to_do)
-    with concurrent.futures.ThreadPoolExecutor(max_threads) as executor:
+    with concurrent.futures.ThreadPoolExecutor(MAX_THREADS) as executor:
         executor.map(check_app_store_status, apps_to_do)
-    print(f'\033[92m\n[INFO] Completed apps status.\033[0m')
+    print('\033[92m\n[INFO] Completed apps status.\033[0m')
 
 # --- Check the profile status of each app based on the API call GetOwnedGames ---
 def check_apps_profile_status(apps):
@@ -310,11 +316,11 @@ def check_apps_profile_status(apps):
 def get_profile_app_ids():
     app_ids = []
     try:
-        r = session.get(steam_api_profile_url, timeout=10)
+        r = SESSION.get(STEAM_API_PROFILE_URL, timeout=10)
         data = r.json()
         for app in data.get('response', {}).get('games', []):
-            id = app.get('appid')
-            app_ids.append(str(id))
+            app_id = app.get('appid')
+            app_ids.append(str(app_id))
         print(f'\033[92m\n[INFO] Profile apps read: {len(app_ids)} apps found.\033[0m')
         return app_ids
     except Exception as e:
@@ -335,21 +341,21 @@ def get_api_app_details_success(app_id):
     url = f'https://store.steampowered.com/api/appdetails?appids={app_id}'
     while True:
         try:
-            time.sleep(api_calls_delay)
-            res = session.get(url, timeout=10)
+            time.sleep(API_CALLS_DELAY)
+            res = SESSION.get(url, timeout=10)
             data = res.json()
             entry = data.get(app_id)
             return entry.get('success', False)
-        except Exception as e:
-            time.sleep(api_calls_delay * 60)
+        except Exception:
+            time.sleep(API_CALLS_DELAY * 60)
 
 
 # --- Export every app into categorized CSV files ---
 def export_all(apps):
-    export_to_CSV(get_all_games(apps), all_games_csv_file_path)
-    export_to_CSV(get_profile_games(apps), profile_games_csv_file_path)
-    export_to_CSV(get_misc_apps(apps), misc_csv_file_path)
-    export_to_CSV(get_family_sharings(apps), family_csv_file_path)
+    export_to_CSV(get_all_games(apps), ALL_GAMES_CSV_FILE_PATH)
+    export_to_CSV(get_profile_games(apps), PROFILE_GAMES_CSV_FILE_PATH)
+    export_to_CSV(get_misc_apps(apps), MISC_CSV_FILE_PATH)
+    export_to_CSV(get_family_sharings(apps), FAMILY_CSV_FILE_PATH)
 
 # --- Get only games and apps from app list ---
 def get_all_games(apps):
