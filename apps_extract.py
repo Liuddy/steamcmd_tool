@@ -17,7 +17,7 @@ import vdf
 load_dotenv(override=True)
 
 CMD_LINE_BATCH = 500            # To avoid Windows command line maximum char limit
-CMD_LINE_DELAY = 60             # To wait for SteamCMD output (adapt it according to the length of licenses.txt)
+CMD_LINE_DELAY = 60             # To wait for SteamCMD output
 API_CALLS_DELAY = 1             # To avoid Steam API calls rate-limit
 MAX_THREADS = 5                 # To limit number of workers on multi-thread
 SESSION = requests.Session()    # To not open a new session for each API call
@@ -25,6 +25,7 @@ SESSION = requests.Session()    # To not open a new session for each API call
 LICENSES_FILE_PATH = os.environ['LICENSES_FILE_PATH']
 ALL_GAMES_CSV_FILE_PATH = os.environ['ALL_GAMES_CSV_FILE_PATH']
 PROFILE_GAMES_CSV_FILE_PATH = os.environ['PROFILE_GAMES_CSV_FILE_PATH']
+GAMES_DLC_CSV_FILE_PATH = os.environ['GAMES_DLC_CSV_FILE_PATH']
 MISC_CSV_FILE_PATH = os.environ['MISC_CSV_FILE_PATH']
 FAMILY_CSV_FILE_PATH = os.environ['FAMILY_CSV_FILE_PATH']
 
@@ -70,13 +71,27 @@ if os.name == 'nt':
 
 # --- App class defining each Steam app ---
 class App:
-    def __init__(self, app_id, name = None, app_type = None, price = None, on_store = None, on_profile = None):
+    def __init__(self, app_id, name = None, app_type = None, price = None, on_store = None, on_profile = None, owned = None, dlc_list = None):
         self.id = app_id
         self.name = name
         self.type = app_type                # Indicate if it's a game, an app, a DLC, a music, a tool or else.
         self.price = price                  # Indicate if it's a free / paid app or coming from family sharing.
         self.on_store = on_store            # Indicate if it's available on store or not.
         self.on_profile = on_profile        # Indicate if it's listed on Steam profile games or not.
+        self.owned = owned
+        self.dlc_list = dlc_list
+
+    def __eq__(self, app):
+        return (
+            self.id == app.get_id()
+            and self.name == app.get_name()
+            and self.type == app.get_type()
+            and self.price == app.get_price()
+            and self.on_store == app.is_on_store()
+            and self.on_profile == app.is_on_profile()
+            and self.owned == app.is_owned()
+            and self.dlc_list == app.get_dlc_list()
+        )
 
     def get_id(self):
         return self.id
@@ -105,6 +120,18 @@ class App:
         return self.on_profile
     def set_on_profile(self, on_profile):
         self.on_profile = on_profile
+
+    def is_owned(self):
+        return self.owned
+    def set_owned(self, owned):
+        self.owned = owned
+
+    def get_dlc_list(self):
+        return self.dlc_list
+    def set_dlc_list(self, dlc_list):
+        self.dlc_list = dlc_list
+    def add_dlc(self, dlc):
+        self.dlc_list.append(dlc)
 
 
 # --- Read licenses.txt and create an App for each appID found ---
@@ -364,6 +391,7 @@ def get_all_games(apps):
     for app in apps:
         if app.get_type().lower() in valid_types and app.get_price().lower() != 'family':
             games.append(app)
+    export_to_CSV(get_games_dlc_apps(games), GAMES_DLC_CSV_FILE_PATH)
     return games
 
 # --- Get only the profile games and apps from app list ---
@@ -392,18 +420,27 @@ def get_family_sharings(apps):
             sharing.append(app)
     return sharing
 
+# --- Get only DLCs for owned games from app list ---
+def get_games_dlc_apps(games):
+    dlc_list = []
+    for game in games:
+        for dlc in game.get_dlc_list():
+            dlc_list.append(dlc)
+    return dlc_list
+
 # --- Export the App list to the provided CSV file ---
 def export_to_CSV(apps, file_path):
     with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile'])
+        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned'])
         writer.writerows([[
             app.get_id(),
             app.get_name(),
             app.get_type(),
             app.get_price(),
             'Available' if app.is_on_store() else 'Not available',
-            'Showing' if app.is_on_profile() else 'Not showing'
+            'Showing' if app.is_on_profile() else 'Not showing',
+            'Owned' if app.is_owned() else 'Not owned'
         ] for app in apps])
     print(f'\033[92m\n[INFO] CSV export done: {file_path}, {len(apps)} apps exported.\033[0m')
 
