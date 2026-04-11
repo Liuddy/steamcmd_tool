@@ -2,15 +2,15 @@ import concurrent.futures
 import csv
 import os
 import re
+import requests
 import subprocess
 import sys
 import time
-from dotenv import load_dotenv
-import requests
 import vdf
+from dotenv import load_dotenv
 
 # --- Preliminary steps ---
-# Connect to Steam and extract every licenses you own with the following command line
+# Connect to Steam and extract every license you own with the following command line
 # (replace "username" with yours and change steamcmd.exe path if needed):
 # C:\steamcmd\steamcmd.exe +login username +licenses_print +quit > licenses.txt
 
@@ -34,6 +34,7 @@ STEAM_KEY = os.environ['STEAM_KEY']
 STEAM_ID = os.environ['STEAM_ID']
 STEAM_API_PROFILE_URL = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_KEY}&steamid={STEAM_ID}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
 
+
 # --- Logging configuration ---
 LOG_FILE_PATH = 'logs.txt'
 BACKLOGS_FILE_PATH = 'backlogs.txt'
@@ -53,6 +54,10 @@ class Logger:
 
 sys.stdout = Logger(LOG_FILE_PATH)
 
+# Allow to print colors in terminal
+if os.name == 'nt':
+    os.system('')
+
 # --- Rename logs.txt to backlogs.txt ---
 def stop_logging():
     try:
@@ -64,10 +69,6 @@ def stop_logging():
     except Exception as e:
         sys.__stdout__.write(f'\033[91m\n[ERR] Failed to save logs file: {e}\033[0m')
 
-# Allow to print colors in terminal
-if os.name == 'nt':
-    os.system('')
-
 
 # --- App class defining each Steam app ---
 class App:
@@ -78,8 +79,8 @@ class App:
         self.price = price                  # Indicate if it's a free / paid app or coming from family sharing.
         self.on_store = on_store            # Indicate if it's available on store or not.
         self.on_profile = on_profile        # Indicate if it's listed on Steam profile games or not.
-        self.owned = owned
-        self.dlc_list = dlc_list
+        self.owned = owned                  # Indicate if the app is actually owned.
+        self.dlc_list = dlc_list            # A list of any DLC ID the app has.
 
     def __eq__(self, app):
         return (
@@ -141,6 +142,7 @@ def make_app_list():
     with open(LICENSES_FILE_PATH, encoding='utf-8') as f:
         app_price = None
         for line in f:
+            # The state line always precede the appID line in licenses file
             if re.search(r'\bState\b\s*:', line):
                 app_price = find_app_price(line)
                 continue
@@ -163,6 +165,7 @@ def find_app_id(line, app_price, saved_apps, apps):
     app_ids = re.findall(r'(\d+)(?=,)', line)
     for app_id in app_ids:
         if app_id in saved_apps:
+            # Replace the app price in case it's both owned by the user and its family group
             if saved_apps[app_id] != app_price and app_price != 'Family':
                 saved_apps[app_id] = app_price
                 replace_app_price(apps, app_id, app_price)
@@ -179,7 +182,7 @@ def replace_app_price(apps, app_id, app_price):
             app.set_price(app_price)
 
 
-# --- Complete the informations of each app by reading previous logs file ---
+# --- Complete information of each app by reading previous logs file ---
 def complete_apps_from_backlogs(apps):
     with open(BACKLOGS_FILE_PATH, encoding='utf-8') as f:
         for line in f:
@@ -205,7 +208,13 @@ def complete_apps_from_backlogs(apps):
 
 # --- Complete the name and type of each app using SteamCMD ---
 def complete_apps_name_and_type(apps):
-    apps_to_do = [app for app in apps if not app.get_name() or not app.get_type()]
+    apps_to_do = [
+        app for app in apps
+        if not app.get_name()
+        or not app.get_type()
+        or app.get_name() == '[ERROR]'
+        or app.get_type() == '[ERROR]'
+    ]
     vdf_parsed = get_parsed_output(apps_to_do)
     for app in apps_to_do:
         app_data = vdf_parsed.get(app.get_id()).get(app.get_id())   # Doubled because VDF returns the block with app ID
@@ -320,9 +329,9 @@ def parse_output_to_vdf(output):
     return parsed_apps
 
 
-# --- Complete the store and profile status of each app using multi-threaded calls to Steam API ---
+# --- Complete the store and profile status of each app using multithreaded calls to Steam API ---
 def complete_apps_status(apps):
-    apps_to_do = [app for app in apps if app.is_on_store() == None or app.is_on_profile() == None]
+    apps_to_do = [app for app in apps if app.is_on_store() is None or app.is_on_profile() is None]
     check_apps_profile_status(apps_to_do)
     with concurrent.futures.ThreadPoolExecutor(MAX_THREADS) as executor:
         executor.map(check_app_store_status, apps_to_do)
@@ -354,7 +363,7 @@ def get_profile_app_ids():
         print(f'\033[91m\n[ERR] Steam API getOwnedGames failed: {e}\033[0m')
         return None
 
-# --- Permits to multi-threaded API calls to check the store status of an app ---
+# --- Permits to multithread API calls to check the store status of an app ---
 def check_app_store_status(app):
     api_success = get_api_app_details_success(app.get_id())
     if api_success:
@@ -379,10 +388,10 @@ def get_api_app_details_success(app_id):
 
 # --- Export every app into categorized CSV files ---
 def export_all(apps):
-    export_to_CSV(get_all_games(apps), ALL_GAMES_CSV_FILE_PATH)
-    export_to_CSV(get_profile_games(apps), PROFILE_GAMES_CSV_FILE_PATH)
-    export_to_CSV(get_misc_apps(apps), MISC_CSV_FILE_PATH)
-    export_to_CSV(get_family_sharings(apps), FAMILY_CSV_FILE_PATH)
+    export_to_csv(get_all_games(apps), ALL_GAMES_CSV_FILE_PATH)
+    export_to_csv(get_profile_games(apps), PROFILE_GAMES_CSV_FILE_PATH)
+    export_to_csv(get_misc_apps(apps), MISC_CSV_FILE_PATH)
+    export_to_csv(get_family_sharings(apps), FAMILY_CSV_FILE_PATH)
 
 # --- Get only games and apps from app list ---
 def get_all_games(apps):
@@ -391,7 +400,6 @@ def get_all_games(apps):
     for app in apps:
         if app.get_type().lower() in valid_types and app.get_price().lower() != 'family':
             games.append(app)
-    export_to_CSV(get_games_dlc_apps(games), GAMES_DLC_CSV_FILE_PATH)
     return games
 
 # --- Get only the profile games and apps from app list ---
@@ -406,7 +414,7 @@ def get_profile_games(apps):
 # --- Get only apps other than games and apps from app list ---
 def get_misc_apps(apps):
     misc = []
-    valid_types = ['game', 'demo', 'beta', 'application']
+    valid_types = ['game', 'demo', 'beta', 'application', 'dlc']
     for app in apps:
         if app.get_type().lower() not in valid_types and app.get_price().lower() != 'family':
             misc.append(app)
@@ -429,7 +437,7 @@ def get_games_dlc_apps(games):
     return dlc_list
 
 # --- Export the App list to the provided CSV file ---
-def export_to_CSV(apps, file_path):
+def export_to_csv(apps, file_path):
     with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned'])
