@@ -72,7 +72,18 @@ def stop_logging():
 
 # --- App class defining each Steam app ---
 class App:
-    def __init__(self, app_id, name = None, app_type = None, price = None, on_store = None, on_profile = None, owned = None, dlc_list = None):
+    def __init__(
+            self,
+            app_id,
+            name = None,
+            app_type = None,
+            price = None,
+            on_store = None,
+            on_profile = None,
+            owned = None,
+            dlc_id_list = None,
+            dlc_list = None
+    ):
         self.id = app_id
         self.name = name
         self.type = app_type                # Indicate if it's a game, an app, a DLC, a music, a tool or else.
@@ -80,7 +91,8 @@ class App:
         self.on_store = on_store            # Indicate if it's available on store or not.
         self.on_profile = on_profile        # Indicate if it's listed on Steam profile games or not.
         self.owned = owned                  # Indicate if the app is actually owned.
-        self.dlc_list = dlc_list            # A list of any DLC ID the app has.
+        self.dlc_id_list = dlc_id_list      # A list of any DLC ID the app has.
+        self.dlc_list = dlc_list            # A list of any DLC the app has.
 
     def __eq__(self, app):
         return (
@@ -105,6 +117,8 @@ class App:
     def get_type(self):
         return self.type
     def set_type(self, app_type):
+        if app_type != '[ERROR]':
+            app_type = app_type[0].upper() + app_type[1:]       # Avoids having "Game" and "game"
         self.type = app_type
 
     def get_price(self):
@@ -127,11 +141,19 @@ class App:
     def set_owned(self, owned):
         self.owned = owned
 
+    def get_dlc_id_list(self):
+        return self.dlc_id_list
+    def set_dlc_id_list(self, dlc_id_list):
+        dlc_id_list = [str(dlc_id) for dlc_id in dlc_id_list]   # DLC ID list comes as a number array
+        self.dlc_id_list = dlc_id_list
+
     def get_dlc_list(self):
         return self.dlc_list
     def set_dlc_list(self, dlc_list):
         self.dlc_list = dlc_list
     def add_dlc(self, dlc):
+        if self.dlc_list is None:
+            self.dlc_list = []
         self.dlc_list.append(dlc)
 
 
@@ -332,7 +354,7 @@ def parse_output_to_vdf(output):
 
 
 # --- Complete the store and profile status of each app using multithreaded calls to Steam API ---
-def complete_apps_status(apps):
+def complete_apps_status_and_dlc(apps):
     apps_to_do = [app for app in apps if app.is_on_store() is None or app.is_on_profile() is None]
     check_apps_profile_status(apps_to_do)
     with concurrent.futures.ThreadPoolExecutor(MAX_THREADS) as executor:
@@ -383,9 +405,28 @@ def get_api_app_details_success(app_id):
             res = SESSION.get(url, timeout=10)
             data = res.json()
             entry = data.get(app_id)
-            return entry.get('success', False)
+            success = entry.get('success', False)
+            if success:
+                get_api_app_dlc(entry, app_id)
+                return True
+            return False
         except Exception:
             time.sleep(API_CALLS_DELAY * 60)
+
+# --- Get the app DLC list from app_details API call ---
+def get_api_app_dlc_id(entry, app_id):
+    data = entry.get('data', None)
+    if data is None:
+        return
+    dlcs_id = data.get('dlc', None)
+    if dlcs_id is None:
+        return
+    apps_to_do = [app for app in apps if app.get_dlc_id_list() is None]
+    for app in apps_to_do:
+        if app.get_id() == app_id:
+            app.set_dlc_id_list(dlcs)
+            print(f'\n[DEBUG] Completed app {app.get_id()}, DLC list: {app.get_dlc_id_list()}')
+            return
 
 
 # --- Export every app into categorized CSV files ---
@@ -442,7 +483,7 @@ def get_games_dlc_apps(games):
 def export_to_csv(apps, file_path):
     with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned'])
+        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned', 'DLC'])
         writer.writerows([[
             app.get_id(),
             app.get_name(),
@@ -450,7 +491,8 @@ def export_to_csv(apps, file_path):
             app.get_price(),
             'Available' if app.is_on_store() else 'Not available',
             'Showing' if app.is_on_profile() else 'Not showing',
-            'Owned' if app.is_owned() else 'Not owned'
+            'Owned' if app.is_owned() else 'Not owned',
+            app.get_dlc_id_list if app.get_dlc_id_list() else 'No DLC'
         ] for app in apps])
     print(f'\033[92m\n[INFO] CSV export done: {file_path}, {len(apps)} apps exported.\033[0m')
 
@@ -459,7 +501,7 @@ def main():
     apps = make_app_list()
     complete_apps_from_backlogs(apps)
     complete_apps_name_and_type(apps)
-    complete_apps_status(apps)
+    complete_apps_status_and_dlc(apps)
     export_all(apps)
     stop_logging()
 
