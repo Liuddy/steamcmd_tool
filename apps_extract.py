@@ -19,7 +19,7 @@ load_dotenv(override=True)
 
 CMD_LINE_BATCH = 500            # To avoid Windows command line maximum char limit
 CMD_LINE_DELAY = 60             # To wait for SteamCMD output
-API_CALLS_DELAY = 1             # To avoid Steam API calls rate-limit
+API_CALLS_DELAY = 5             # To avoid Steam API calls rate-limit (200 request each 5min)
 MAX_THREADS = 5                 # To limit number of workers on multi-thread
 SESSION = requests.Session()    # To not open a new session for each API call
 
@@ -429,7 +429,9 @@ def get_api_app_details_success(app_id):
                 return True
             return False
         except Exception:
+            print(f'\033[93m\n[WARN] app_details API call failed on app {app_id}: waiting 5min\033[0m')
             time.sleep(API_CALLS_DELAY * 60)
+            print(f'\033[93m\n[WARN] 5min passed, retry app_details API call on app {app_id}\033[0m')
 
 # --- Get the app DLC list from app_details API call ---
 def get_api_app_dlc_id(entry, app_id):
