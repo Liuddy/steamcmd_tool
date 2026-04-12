@@ -168,18 +168,20 @@ def find_app_id(line, app_price, saved_apps, apps):
             # Replace the app price in case it's both owned by the user and its family group
             if saved_apps[app_id] != app_price and app_price != 'Family':
                 saved_apps[app_id] = app_price
-                replace_app_price(apps, app_id, app_price)
+                replace_app_price_and_owned(apps, app_id, app_price)
             continue
         else:
             saved_apps[app_id] = app_price
-            apps.append(App(app_id, price = app_price))
+            app_owned = app_price != 'Family'
+            apps.append(App(app_id, price = app_price, owned = app_owned))
         print(f'\n[DEBUG] Read app {app_id}, price: {app_price}')
 
 # --- Find the app from app ID and replace its price status ---
-def replace_app_price(apps, app_id, app_price):
+def replace_app_price_and_owned(apps, app_id, app_price):
     for app in apps:
         if app.get_id() == app_id:
             app.set_price(app_price)
+            app.set_owned(True)
 
 
 # --- Complete information of each app by reading previous logs file ---
@@ -414,7 +416,7 @@ def get_profile_games(apps):
 # --- Get only apps other than games and apps from app list ---
 def get_misc_apps(apps):
     misc = []
-    valid_types = ['game', 'demo', 'beta', 'application', 'dlc']
+    valid_types = ['game', 'demo', 'beta', 'application', 'dlc', 'music']
     for app in apps:
         if app.get_type().lower() not in valid_types and app.get_price().lower() != 'family':
             misc.append(app)
