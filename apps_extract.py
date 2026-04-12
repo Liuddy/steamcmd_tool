@@ -1,4 +1,5 @@
 import concurrent.futures
+import ast
 import csv
 import os
 import re
@@ -212,21 +213,35 @@ def complete_apps_from_backlogs(apps):
         for line in f:
             if '[DEBUG]' not in line:
                 continue
+            do_create_dlc = True        # To create DLC App if match_dlc_created is True and the app doesn't exist yet
+            match_dlc_created = re.search(r'Created app DLC (\d+)', line)
             match_name_type = re.search(r'Completed app (\d+), name:\s*(.+?)\s\|\stype:\s*([^\r\n]+)', line)
+            match_dlc_id_list = re.search(r'Completed app (\d+), DLCs ID list:\s*([^\r\n]+)', line)
             match_status = re.search(r'Completed app (\d+), on store:\s*(.+?)\s\|\son profile:\s*([^\r\n]+)', line)
-            if not match_name_type and not match_status:
+            if not match_dlc_created and not match_name_type and not match_dlc_id_list and not match_status:
                 continue
             for app in apps:
+                if match_dlc_created and match_dlc_created.group(1) == app.get_id():
+                    do_create_dlc = False
+                    break
                 if match_name_type and match_name_type.group(1) == app.get_id():
                     app.set_name(match_name_type.group(2))
                     app.set_type(match_name_type.group(3))
                     print(f'\n[DEBUG] Completed app {app.get_id()}, name: {app.get_name()} | type: {app.get_type()}')
+                    break
+                if match_dlc_id_list and match_dlc_id_list.group(1) == app.get_id():
+                    array_conv = ast.literal_eval(match_dlc_id_list.group(2))
+                    app.set_dlc_id_list(array_conv)
+                    print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
                     break
                 if match_status and match_status.group(1) == app.get_id():
                     app.set_on_store(match_status.group(2) == 'True')
                     app.set_on_profile(match_status.group(3) == 'True')
                     print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
                     break
+            if match_dlc_created and do_create_dlc:
+                apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
+                print(f'\n[DEBUG] Created app DLC {dlc_id}')
     print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
 
 
@@ -354,7 +369,7 @@ def parse_output_to_vdf(output):
 
 
 # --- Complete the store and profile status of each app using multithreaded calls to Steam API ---
-def complete_apps_status_and_dlc(apps):
+def complete_apps_status(apps):
     apps_to_do = [app for app in apps if app.is_on_store() is None or app.is_on_profile() is None]
     check_apps_profile_status(apps_to_do)
     with concurrent.futures.ThreadPoolExecutor(MAX_THREADS) as executor:
@@ -407,7 +422,7 @@ def get_api_app_details_success(app_id):
             entry = data.get(app_id)
             success = entry.get('success', False)
             if success:
-                get_api_app_dlc(entry, app_id)
+                get_api_app_dlc_id(entry, app_id)
                 return True
             return False
         except Exception:
@@ -424,9 +439,40 @@ def get_api_app_dlc_id(entry, app_id):
     apps_to_do = [app for app in apps if app.get_dlc_id_list() is None]
     for app in apps_to_do:
         if app.get_id() == app_id:
-            app.set_dlc_id_list(dlcs)
-            print(f'\n[DEBUG] Completed app {app.get_id()}, DLC list: {app.get_dlc_id_list()}')
+            app.set_dlc_id_list(dlcs_id)
+            print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
             return
+
+
+# --- Complete the DLC list each app using its DLCs ID list ---
+def complete_apps_dlcs(apps):
+    apps_to_do = [app for app in apps if app.get_dlc_id_list() is not None and app.get_price().lower() != 'family']
+    missing_dlcs = []
+    apps_missing_dlcs = []
+    for app_td in apps_to_do:
+        for dlc_id in app_td.get_dlc_id_list():
+            existing_app = [app for app in apps if app.get_id() == dlc_id]
+            if len(existing_app) == 1:
+                app_td.add_dlc(existing_app[0])
+            else:
+                missing_dlcs.append(dlc_id)
+                apps_missing_dlcs.append(app_td)
+    create_missing_apps_dlcs(missing_dlcs, apps_missing_dlcs)
+    print('\033[92m\n[INFO] Completed apps DLCs.\033[0m')
+
+# --- Create an App object for each missing DLC ---
+def create_missing_apps_dlcs(missing_dlcs, apps_missing_dlcs):
+    dlc_apps = []
+    for dlc_id in missing_dlcs:
+        dlc_apps.append(App(dlc_id, price = '[UNKNOWN]', owned = False))
+        print(f'\n[DEBUG] Created app DLC {dlc_id}')
+    complete_apps_name_and_type(dlc_apps)
+    complete_apps_status(dlc_apps)
+    for app in apps_missing_dlcs:
+        for dlc in dlc_apps:
+            if dlc.get_id() in app.get_dlc_id_list():
+                app.add_dlc(dlc)
+                dlc_apps.remove(dlc)
 
 
 # --- Export every app into categorized CSV files ---
@@ -435,6 +481,7 @@ def export_all(apps):
     export_to_csv(get_profile_games(apps), PROFILE_GAMES_CSV_FILE_PATH)
     export_to_csv(get_misc_apps(apps), MISC_CSV_FILE_PATH)
     export_to_csv(get_family_sharings(apps), FAMILY_CSV_FILE_PATH)
+    export_to_csv(get_games_dlc_apps(apps), GAMES_DLC_CSV_FILE_PATH)
 
 # --- Get only games and apps from app list ---
 def get_all_games(apps):
@@ -454,7 +501,7 @@ def get_profile_games(apps):
             profile_games.append(app)
     return profile_games
 
-# --- Get only apps other than games and apps from app list ---
+# --- Get only apps other than games, apps and DLCs from app list ---
 def get_misc_apps(apps):
     misc = []
     valid_types = ['game', 'demo', 'beta', 'application', 'dlc', 'music']
@@ -475,8 +522,9 @@ def get_family_sharings(apps):
 def get_games_dlc_apps(games):
     dlc_list = []
     for game in games:
-        for dlc in game.get_dlc_list():
-            dlc_list.append(dlc)
+        if game.get_price().lower() != 'family':
+            for dlc in game.get_dlc_list():
+                dlc_list.append(dlc)
     return dlc_list
 
 # --- Export the App list to the provided CSV file ---
@@ -492,7 +540,7 @@ def export_to_csv(apps, file_path):
             'Available' if app.is_on_store() else 'Not available',
             'Showing' if app.is_on_profile() else 'Not showing',
             'Owned' if app.is_owned() else 'Not owned',
-            app.get_dlc_id_list if app.get_dlc_id_list() else 'No DLC'
+            app.get_dlc_id_list() if app.get_dlc_id_list() else 'No DLC'
         ] for app in apps])
     print(f'\033[92m\n[INFO] CSV export done: {file_path}, {len(apps)} apps exported.\033[0m')
 
@@ -501,7 +549,8 @@ def main():
     apps = make_app_list()
     complete_apps_from_backlogs(apps)
     complete_apps_name_and_type(apps)
-    complete_apps_status_and_dlc(apps)
+    complete_apps_status(apps)
+    complete_apps_dlcs(apps)
     export_all(apps)
     stop_logging()
 
