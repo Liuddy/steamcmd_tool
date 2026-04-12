@@ -209,40 +209,43 @@ def replace_app_price_and_owned(apps, app_id, app_price):
 
 # --- Complete information of each app by reading previous logs file ---
 def complete_apps_from_backlogs(apps):
-    with open(BACKLOGS_FILE_PATH, encoding='utf-8') as f:
-        for line in f:
-            if '[DEBUG]' not in line:
-                continue
-            do_create_dlc = True        # To create DLC App if match_dlc_created is True and the app doesn't exist yet
-            match_dlc_created = re.search(r'Created app DLC (\d+)', line)
-            match_name_type = re.search(r'Completed app (\d+), name:\s*(.+?)\s\|\stype:\s*([^\r\n]+)', line)
-            match_dlc_id_list = re.search(r'Completed app (\d+), DLCs ID list:\s*([^\r\n]+)', line)
-            match_status = re.search(r'Completed app (\d+), on store:\s*(.+?)\s\|\son profile:\s*([^\r\n]+)', line)
-            if not match_dlc_created and not match_name_type and not match_dlc_id_list and not match_status:
-                continue
-            for app in apps:
-                if match_dlc_created and match_dlc_created.group(1) == app.get_id():
-                    do_create_dlc = False
-                    break
-                if match_name_type and match_name_type.group(1) == app.get_id():
-                    app.set_name(match_name_type.group(2))
-                    app.set_type(match_name_type.group(3))
-                    print(f'\n[DEBUG] Completed app {app.get_id()}, name: {app.get_name()} | type: {app.get_type()}')
-                    break
-                if match_dlc_id_list and match_dlc_id_list.group(1) == app.get_id():
-                    array_conv = ast.literal_eval(match_dlc_id_list.group(2))
-                    app.set_dlc_id_list(array_conv)
-                    print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
-                    break
-                if match_status and match_status.group(1) == app.get_id():
-                    app.set_on_store(match_status.group(2) == 'True')
-                    app.set_on_profile(match_status.group(3) == 'True')
-                    print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
-                    break
-            if match_dlc_created and do_create_dlc:
-                apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
-                print(f'\n[DEBUG] Created app DLC {dlc_id}')
-    print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
+    try:
+        with open(BACKLOGS_FILE_PATH, encoding='utf-8') as f:
+            for line in f:
+                if '[DEBUG]' not in line:
+                    continue
+                do_create_dlc = True        # To create DLC App if match_dlc_created is True and the app doesn't exist yet
+                match_dlc_created = re.search(r'Created app DLC (\d+)', line)
+                match_name_type = re.search(r'Completed app (\d+), name:\s*(.+?)\s\|\stype:\s*([^\r\n]+)', line)
+                match_dlc_id_list = re.search(r'Completed app (\d+), DLCs ID list:\s*([^\r\n]+)', line)
+                match_status = re.search(r'Completed app (\d+), on store:\s*(.+?)\s\|\son profile:\s*([^\r\n]+)', line)
+                if not match_dlc_created and not match_name_type and not match_dlc_id_list and not match_status:
+                    continue
+                for app in apps:
+                    if match_dlc_created and match_dlc_created.group(1) == app.get_id():
+                        do_create_dlc = False
+                        break
+                    if match_name_type and match_name_type.group(1) == app.get_id():
+                        app.set_name(match_name_type.group(2))
+                        app.set_type(match_name_type.group(3))
+                        print(f'\n[DEBUG] Completed app {app.get_id()}, name: {app.get_name()} | type: {app.get_type()}')
+                        break
+                    if match_dlc_id_list and match_dlc_id_list.group(1) == app.get_id():
+                        array_conv = ast.literal_eval(match_dlc_id_list.group(2))
+                        app.set_dlc_id_list(array_conv)
+                        print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
+                        break
+                    if match_status and match_status.group(1) == app.get_id():
+                        app.set_on_store(match_status.group(2) == 'True')
+                        app.set_on_profile(match_status.group(3) == 'True')
+                        print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
+                        break
+                if match_dlc_created and do_create_dlc:
+                    apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
+                    print(f'\n[DEBUG] Created app DLC {dlc_id}')
+        print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
+    except FileNotFoundError:
+        print('\033[92m\n[INFO] No backlogs.txt found.\033[0m')
 
 
 # --- Complete the name and type of each app using SteamCMD ---
@@ -413,7 +416,7 @@ def check_app_store_status(app):
 
 # --- Get the success status of app_details API call ---
 def get_api_app_details_success(app_id):
-    url = f'https://store.steampowered.com/api/appdetails?appids={app_id}'
+    url = f'https://store.steampowered.com/api/appdetails?appids={app_id}&cc=us&l=en'
     while True:
         try:
             time.sleep(API_CALLS_DELAY)
