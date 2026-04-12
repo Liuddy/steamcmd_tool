@@ -1,7 +1,7 @@
-import concurrent.futures
 import ast
 import csv
 import os
+import random
 import re
 import requests
 import subprocess
@@ -17,11 +17,11 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-CMD_LINE_BATCH = 500            # To avoid Windows command line maximum char limit
-CMD_LINE_DELAY = 60             # To wait for SteamCMD output
-API_CALLS_DELAY = 5             # To avoid Steam API calls rate-limit (200 request each 5min)
-MAX_THREADS = 5                 # To limit number of workers on multi-thread
-SESSION = requests.Session()    # To not open a new session for each API call
+CMD_LINE_BATCH = 500                                                # To avoid Windows command line maximum char limit
+CMD_LINE_DELAY = 60                                                 # To wait for SteamCMD output
+API_CALLS_LIMIT = 200                                               # The Steam API max calls (200 requests)
+API_CALLS_TIMEOUT = 300                                             # The Steam API timeout (300s = 5min)
+API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.2         # To avoid Steam API calls rate-limit
 
 LICENSES_FILE_PATH = os.environ['LICENSES_FILE_PATH']
 ALL_GAMES_CSV_FILE_PATH = os.environ['ALL_GAMES_CSV_FILE_PATH']
@@ -245,7 +245,7 @@ def complete_apps_from_backlogs(apps):
                     print(f'\n[DEBUG] Created app DLC {dlc_id}')
         print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
     except FileNotFoundError:
-        print('\033[92m\n[INFO] No backlogs.txt found.\033[0m')
+        print('\n[INFO] No backlogs.txt found.')
 
 
 # --- Complete the name and type of each app using SteamCMD ---
@@ -371,12 +371,11 @@ def parse_output_to_vdf(output):
     return parsed_apps
 
 
-# --- Complete the store and profile status of each app using multithreaded calls to Steam API ---
+# --- Complete the store and profile status of each app using calls to Steam API ---
 def complete_apps_status(apps):
     apps_to_do = [app for app in apps if app.is_on_store() is None or app.is_on_profile() is None]
     check_apps_profile_status(apps_to_do)
-    with concurrent.futures.ThreadPoolExecutor(MAX_THREADS) as executor:
-        executor.map(check_app_store_status, apps_to_do)
+    check_apps_store_status(apps_to_do)
     print('\033[92m\n[INFO] Completed apps status.\033[0m')
 
 # --- Check the profile status of each app based on the API call GetOwnedGames ---
@@ -394,7 +393,7 @@ def check_apps_profile_status(apps):
 def get_profile_app_ids():
     app_ids = []
     try:
-        r = SESSION.get(STEAM_API_PROFILE_URL, timeout=10)
+        r = requests.get(STEAM_API_PROFILE_URL, timeout = 10)
         data = r.json()
         for app in data.get('response', {}).get('games', []):
             app_id = app.get('appid')
@@ -405,22 +404,31 @@ def get_profile_app_ids():
         print(f'\033[91m\n[ERR] Steam API getOwnedGames failed: {e}\033[0m')
         return None
 
-# --- Permits to multithread API calls to check the store status of an app ---
-def check_app_store_status(app):
-    api_success = get_api_app_details_success(app.get_id())
-    if api_success:
-        app.set_on_store(True)
-    else:
-        app.set_on_store(False)
-    print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
+# --- Check the store status of each app based on the app_details API call success ---
+def check_apps_store_status(apps):
+    for app in apps:
+        api_success = get_api_app_details_success(app.get_id())
+        if api_success:
+            app.set_on_store(True)
+        else:
+            app.set_on_store(False)
+        print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
 
-# --- Get the success status of app_details API call ---
+# --- Get the success status of appdetails API call ---
 def get_api_app_details_success(app_id):
     url = f'https://store.steampowered.com/api/appdetails?appids={app_id}&cc=us&l=en'
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://store.steampowered.com/",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
+    }
     while True:
         try:
-            time.sleep(API_CALLS_DELAY)
-            res = SESSION.get(url, timeout=10)
+            # Use of random to try to bypass bot detection with an irregular call pattern
+            time.sleep(random.uniform(API_CALLS_DELAY, API_CALLS_DELAY + 5))
+            res = requests.get(url, headers = headers, timeout = 10)
             data = res.json()
             entry = data.get(app_id)
             success = entry.get('success', False)
@@ -429,11 +437,10 @@ def get_api_app_details_success(app_id):
                 return True
             return False
         except Exception:
-            print(f'\033[93m\n[WARN] app_details API call failed on app {app_id}: waiting 5min\033[0m')
-            time.sleep(API_CALLS_DELAY * 60)
-            print(f'\033[93m\n[WARN] 5min passed, retry app_details API call on app {app_id}\033[0m')
+            print(f'\033[93m\n[WARN] Steam API appdetails call failed on app {app_id}: waiting 30s...\033[0m')
+            time.sleep(30)
 
-# --- Get the app DLC list from app_details API call ---
+# --- Get the app DLC list from appdetails API call ---
 def get_api_app_dlc_id(entry, app_id):
     data = entry.get('data', None)
     if data is None:
