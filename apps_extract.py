@@ -1,7 +1,6 @@
 import ast
 import csv
 import os
-import random
 import re
 import requests
 import subprocess
@@ -21,7 +20,7 @@ CMD_LINE_BATCH = 500                                                # To avoid W
 CMD_LINE_DELAY = 60                                                 # To wait for SteamCMD output
 API_CALLS_LIMIT = 200                                               # The Steam API max calls (200 requests)
 API_CALLS_TIMEOUT = 300                                             # The Steam API timeout (300s = 5min)
-API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.2         # To avoid Steam API calls rate-limit
+API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.1         # To avoid Steam API calls rate-limit
 
 LICENSES_FILE_PATH = os.environ['LICENSES_FILE_PATH']
 ALL_GAMES_CSV_FILE_PATH = os.environ['ALL_GAMES_CSV_FILE_PATH']
@@ -242,7 +241,7 @@ def complete_apps_from_backlogs(apps):
                         break
                 if match_dlc_created and do_create_dlc:
                     apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
-                    print(f'\n[DEBUG] Created app DLC {dlc_id}')
+                    print(f'\n[DEBUG] Created app DLC {match_dlc_created.group(1)}')
         print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
     except FileNotFoundError:
         print('\n[INFO] No backlogs.txt found.')
@@ -426,8 +425,7 @@ def get_api_app_details_success(app_id):
     }
     while True:
         try:
-            # Use of random to try to bypass bot detection with an irregular call pattern
-            time.sleep(random.uniform(API_CALLS_DELAY, API_CALLS_DELAY + 5))
+            time.sleep(API_CALLS_DELAY)
             res = requests.get(url, headers = headers, timeout = 10)
             data = res.json()
             entry = data.get(app_id)
@@ -436,7 +434,7 @@ def get_api_app_details_success(app_id):
                 get_api_app_dlc_id(entry, app_id)
                 return True
             return False
-        except Exception:
+        except Exception(BaseException):
             print(f'\033[93m\n[WARN] Steam API appdetails call failed on app {app_id}: waiting 30s...\033[0m')
             time.sleep(30)
 
@@ -448,7 +446,7 @@ def get_api_app_dlc_id(entry, app_id):
     dlcs_id = data.get('dlc', None)
     if dlcs_id is None:
         return
-    apps_to_do = [app for app in apps if app.get_dlc_id_list() is None]
+    apps_to_do = [app for app in all_apps if app.get_dlc_id_list() is None]
     for app in apps_to_do:
         if app.get_id() == app_id:
             app.set_dlc_id_list(dlcs_id)
@@ -558,12 +556,14 @@ def export_to_csv(apps, file_path):
 
 
 def main():
-    apps = make_app_list()
-    complete_apps_from_backlogs(apps)
-    complete_apps_name_and_type(apps)
-    complete_apps_status(apps)
-    complete_apps_dlcs(apps)
-    export_all(apps)
+    global all_apps
+    all_apps = make_app_list()
+    complete_apps_from_backlogs(all_apps)
+    complete_apps_name_and_type(all_apps)
+    complete_apps_status(all_apps)
+    complete_apps_dlcs(all_apps)
+    export_all(all_apps)
     stop_logging()
 
+all_apps = []
 main()
