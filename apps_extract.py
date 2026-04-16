@@ -25,6 +25,7 @@ API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.1         # To avoid S
 LICENSES_FILE_PATH = os.environ['LICENSES_FILE_PATH']
 ALL_GAMES_CSV_FILE_PATH = os.environ['ALL_GAMES_CSV_FILE_PATH']
 PROFILE_GAMES_CSV_FILE_PATH = os.environ['PROFILE_GAMES_CSV_FILE_PATH']
+FOLLOWED_GAMES_CSV_FILE_PATH = os.environ['FOLLOWED_GAMES_CSV_FILE_PATH']
 GAMES_DLC_CSV_FILE_PATH = os.environ['GAMES_DLC_CSV_FILE_PATH']
 MISC_CSV_FILE_PATH = os.environ['MISC_CSV_FILE_PATH']
 FAMILY_CSV_FILE_PATH = os.environ['FAMILY_CSV_FILE_PATH']
@@ -32,7 +33,8 @@ FAMILY_CSV_FILE_PATH = os.environ['FAMILY_CSV_FILE_PATH']
 STEAM_CMD_EXE = os.environ['STEAM_CMD_EXE']
 STEAM_KEY = os.environ['STEAM_KEY']
 STEAM_ID = os.environ['STEAM_ID']
-STEAM_API_PROFILE_URL = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_KEY}&steamid={STEAM_ID}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
+STEAM_API_OWNED_GAMES_URL = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_KEY}&steamid={STEAM_ID}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
+STEAM_API_FOLLOWED_GAMES_URL = f'https://api.steampowered.com/IPlayerService/GetGamesFollowed/v1/?key={STEAM_KEY}&steamid={STEAM_ID}'
 
 
 # --- Logging configuration ---
@@ -81,6 +83,7 @@ class App:
             on_store = None,
             on_profile = None,
             owned = None,
+            followed = None,
             dlc_id_list = None,
             dlc_list = None
     ):
@@ -91,6 +94,7 @@ class App:
         self.on_store = on_store            # Indicate if it's available on store or not.
         self.on_profile = on_profile        # Indicate if it's listed on Steam profile games or not.
         self.owned = owned                  # Indicate if the app is actually owned.
+        self.followed = followed            # Indicate if the app is actually followed.
         self.dlc_id_list = dlc_id_list      # A list of any DLC ID the app has.
         self.dlc_list = dlc_list            # A list of any DLC the app has.
 
@@ -103,6 +107,8 @@ class App:
             and self.on_store == app.is_on_store()
             and self.on_profile == app.is_on_profile()
             and self.owned == app.is_owned()
+            and self.followed == app.is_followed()
+            and self.dlc_id_list == app.get_dlc_id_list()
             and self.dlc_list == app.get_dlc_list()
         )
 
@@ -140,6 +146,11 @@ class App:
         return self.owned
     def set_owned(self, owned):
         self.owned = owned
+
+    def is_followed(self):
+        return self.followed
+    def set_followed(self, followed):
+        self.followed = followed
 
     def get_dlc_id_list(self):
         return self.dlc_id_list
@@ -217,7 +228,11 @@ def complete_apps_from_backlogs(apps):
                 match_dlc_created = re.search(r'Created app DLC (\d+)', line)
                 match_name_type = re.search(r'Completed app (\d+), name:\s*(.+?)\s\|\stype:\s*([^\r\n]+)', line)
                 match_dlc_id_list = re.search(r'Completed app (\d+), DLCs ID list:\s*([^\r\n]+)', line)
-                match_status = re.search(r'Completed app (\d+), on store:\s*(.+?)\s\|\son profile:\s*([^\r\n]+)', line)
+                match_status = re.search(r'Completed app (\d+),'
+                                         r' followed:\s*(.+?)\s\|'
+                                         r'\son store:\s*(.+?)\s\|'
+                                         r'\son profile:\s*([^\r\n]+)',
+                                         line)
                 if not match_dlc_created and not match_name_type and not match_dlc_id_list and not match_status:
                     continue
                 for app in apps:
@@ -235,9 +250,13 @@ def complete_apps_from_backlogs(apps):
                         print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
                         break
                     if match_status and match_status.group(1) == app.get_id():
-                        app.set_on_store(match_status.group(2) == 'True')
-                        app.set_on_profile(match_status.group(3) == 'True')
-                        print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
+                        app.set_followed(match_status.group(2) == 'True')
+                        app.set_on_store(match_status.group(3) == 'True')
+                        app.set_on_profile(match_status.group(4) == 'True')
+                        print(f'\n[DEBUG] Completed app {app.get_id()},'
+                              f' followed: {app.is_followed()} |'
+                              f' on store: {app.is_on_store()} |'
+                              f' on profile: {app.is_on_profile()}')
                         break
                 if match_dlc_created and do_create_dlc:
                     apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
@@ -370,12 +389,43 @@ def parse_output_to_vdf(output):
     return parsed_apps
 
 
-# --- Complete the store and profile status of each app using calls to Steam API ---
+# --- Complete the followed, store and profile status of each app using calls to Steam API ---
 def complete_apps_status(apps):
-    apps_to_do = [app for app in apps if app.is_on_store() is None or app.is_on_profile() is None]
+    apps_to_do = [
+        app for app in apps
+        if app.is_followed() is None
+        or app.is_on_store() is None
+        or app.is_on_profile() is None
+    ]
+    check_apps_followed_status(apps_to_do)
     check_apps_profile_status(apps_to_do)
     check_apps_store_status(apps_to_do)
     print('\033[92m\n[INFO] Completed apps status.\033[0m')
+
+# --- Check the followed status of each app based on the API call GetFollowedGames ---
+def check_apps_followed_status(apps):
+    followed_app_ids = get_followed_app_ids()
+    if not followed_app_ids:
+        return
+    for app in apps:
+        if app.get_id() in followed_app_ids:
+            app.set_followed(True)
+        else:
+            app.set_followed(False)
+
+# --- Return a list of every followed app ID using Steam API ---
+def get_followed_app_ids():
+    app_ids = []
+    try:
+        r = requests.get(STEAM_API_FOLLOWED_GAMES_URL, timeout = 10)
+        data = r.json()
+        for app_id in data.get('response', {}).get('appids', []):
+            app_ids.append(str(app_id))
+        print(f'\033[92m\n[INFO] Followed apps read: {len(app_ids)} apps found.\033[0m')
+        return app_ids
+    except Exception as e:
+        print(f'\033[91m\n[ERR] Steam API getFollowedGames failed: {e}\033[0m')
+        return None
 
 # --- Check the profile status of each app based on the API call GetOwnedGames ---
 def check_apps_profile_status(apps):
@@ -392,7 +442,7 @@ def check_apps_profile_status(apps):
 def get_profile_app_ids():
     app_ids = []
     try:
-        r = requests.get(STEAM_API_PROFILE_URL, timeout = 10)
+        r = requests.get(STEAM_API_OWNED_GAMES_URL, timeout = 10)
         data = r.json()
         for app in data.get('response', {}).get('games', []):
             app_id = app.get('appid')
@@ -411,7 +461,10 @@ def check_apps_store_status(apps):
             app.set_on_store(True)
         else:
             app.set_on_store(False)
-        print(f'\n[DEBUG] Completed app {app.get_id()}, on store: {app.is_on_store()} | on profile: {app.is_on_profile()}')
+        print(f'\n[DEBUG] Completed app {app.get_id()},'
+              f' followed: {app.is_followed()} |'
+              f' on store: {app.is_on_store()} |'
+              f' on profile: {app.is_on_profile()}')
 
 # --- Get the success status of appdetails API call ---
 def get_api_app_details_success(app_id):
@@ -489,16 +542,17 @@ def create_missing_apps_dlcs(missing_dlcs, apps_missing_dlcs):
 def export_all(apps):
     export_to_csv(get_all_games(apps), ALL_GAMES_CSV_FILE_PATH)
     export_to_csv(get_profile_games(apps), PROFILE_GAMES_CSV_FILE_PATH)
+    export_to_csv(get_followed_games(apps), FOLLOWED_GAMES_CSV_FILE_PATH)
     export_to_csv(get_misc_apps(apps), MISC_CSV_FILE_PATH)
     export_to_csv(get_family_sharings(apps), FAMILY_CSV_FILE_PATH)
     export_to_csv(get_games_dlc_apps(apps), GAMES_DLC_CSV_FILE_PATH)
 
-# --- Get only games and apps from app list ---
+# --- Get only owned games and apps from app list ---
 def get_all_games(apps):
     games = []
     valid_types = ['game', 'demo', 'beta', 'application']
     for app in apps:
-        if app.get_type().lower() in valid_types and app.get_price().lower() != 'family':
+        if app.get_type().lower() in valid_types and app.is_owned():
             games.append(app)
     return games
 
@@ -510,6 +564,15 @@ def get_profile_games(apps):
         if app.get_type().lower() in valid_types and app.is_on_profile():
             profile_games.append(app)
     return profile_games
+
+# --- Get only the followed games and apps from app list ---
+def get_followed_games(apps):
+    followed_games = []
+    valid_types = ['game', 'demo', 'beta', 'application']
+    for app in apps:
+        if app.get_type().lower() in valid_types and app.is_followed():
+            followed_games.append(app)
+    return followed_games
 
 # --- Get only apps other than games, apps and DLCs from app list ---
 def get_misc_apps(apps):
@@ -532,7 +595,7 @@ def get_family_sharings(apps):
 def get_games_dlc_apps(games):
     dlc_list = []
     for game in games:
-        if game.get_price().lower() != 'family':
+        if game.is_owned():
             for dlc in game.get_dlc_list():
                 dlc_list.append(dlc)
     return dlc_list
@@ -541,7 +604,7 @@ def get_games_dlc_apps(games):
 def export_to_csv(apps, file_path):
     with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned', 'DLC'])
+        writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned', 'Followed', 'DLC'])
         writer.writerows([[
             app.get_id(),
             app.get_name(),
@@ -550,6 +613,7 @@ def export_to_csv(apps, file_path):
             'Available' if app.is_on_store() else 'Not available',
             'Showing' if app.is_on_profile() else 'Not showing',
             'Owned' if app.is_owned() else 'Not owned',
+            'Followed' if app.is_followed() else 'Not followed',
             app.get_dlc_id_list() if app.get_dlc_id_list() else 'No DLC'
         ] for app in apps])
     print(f'\033[92m\n[INFO] CSV export done: {file_path}, {len(apps)} apps exported.\033[0m')
