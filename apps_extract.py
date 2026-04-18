@@ -9,6 +9,8 @@ import time
 import vdf
 from dotenv import load_dotenv
 
+# coucou
+
 # --- Preliminary steps ---
 # Connect to Steam and extract every license you own with the following command line
 # (replace "username" with yours and change steamcmd.exe path if needed):
