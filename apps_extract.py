@@ -16,8 +16,8 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-CMD_LINE_BATCH = 500                                                # To avoid Windows command line maximum char limit
-CMD_LINE_DELAY = 60                                                 # To wait for SteamCMD output
+CMD_LINE_BATCH = 400                                                # To avoid Windows command line maximum char limit
+CMD_LINE_DELAY = 300                                                # To wait for SteamCMD output
 API_CALLS_LIMIT = 200                                               # The Steam API max calls (200 requests)
 API_CALLS_TIMEOUT = 300                                             # The Steam API timeout (300s = 5min)
 API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.1         # To avoid Steam API calls rate-limit
@@ -34,7 +34,7 @@ STEAM_CMD_EXE = os.environ['STEAM_CMD_EXE']
 STEAM_KEY = os.environ['STEAM_KEY']
 STEAM_ID = os.environ['STEAM_ID']
 STEAM_API_OWNED_GAMES_URL = f'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_KEY}&steamid={STEAM_ID}&include_appinfo=true&include_played_free_games=true&skip_unvetted_apps=false&format=json'
-STEAM_API_FOLLOWED_GAMES_URL = f'https://api.steampowered.com/IPlayerService/GetGamesFollowed/v1/?key={STEAM_KEY}&steamid={STEAM_ID}'
+STEAM_API_FOLLOWED_GAMES_URL = f'https://api.steampowered.com/IStoreService/GetGamesFollowed/v1/?key={STEAM_KEY}&steamid={STEAM_ID}'
 
 
 # --- Logging configuration ---
@@ -224,7 +224,9 @@ def complete_apps_from_backlogs(apps):
             for line in f:
                 if '[DEBUG]' not in line:
                     continue
-                do_create_dlc = True        # To create DLC App if match_dlc_created is True and the app doesn't exist yet
+                do_create_app = True    # To create followed App if match_app_created is True and the app doesn't exist yet
+                do_create_dlc = True    # To create DLC App if match_dlc_created is True and the app doesn't exist yet
+                match_app_created = re.search(r'Created followed app (\d+)', line)
                 match_dlc_created = re.search(r'Created app DLC (\d+)', line)
                 match_name_type = re.search(r'Completed app (\d+), name:\s*(.+?)\s\|\stype:\s*([^\r\n]+)', line)
                 match_dlc_id_list = re.search(r'Completed app (\d+), DLCs ID list:\s*([^\r\n]+)', line)
@@ -238,6 +240,9 @@ def complete_apps_from_backlogs(apps):
                 for app in apps:
                     if match_dlc_created and match_dlc_created.group(1) == app.get_id():
                         do_create_dlc = False
+                        break
+                    if match_app_created and match_app_created.group(1) == app.get_id():
+                        do_create_app = False
                         break
                     if match_name_type and match_name_type.group(1) == app.get_id():
                         app.set_name(match_name_type.group(2))
@@ -258,8 +263,11 @@ def complete_apps_from_backlogs(apps):
                               f' on store: {app.is_on_store()} |'
                               f' on profile: {app.is_on_profile()}')
                         break
+                if match_app_created and do_create_app:
+                    apps.append(App(match_app_created.group(1), price = '[UNKNOWN]', on_profile = False, owned = False, followed = True))
+                    print(f'\n[DEBUG] Created followed app {match_app_created.group(1)}')
                 if match_dlc_created and do_create_dlc:
-                    apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', owned = False))
+                    apps.append(App(match_dlc_created.group(1), price = '[UNKNOWN]', on_profile = False, owned = False, followed = False))
                     print(f'\n[DEBUG] Created app DLC {match_dlc_created.group(1)}')
         print('\033[92m\n[INFO] Completed apps info from backlogs.txt.\033[0m')
     except FileNotFoundError:
@@ -395,7 +403,7 @@ def complete_apps_status(apps):
         app for app in apps
         if app.is_followed() is None
         or app.is_on_store() is None
-        or app.is_on_profile() is None
+        or not app.is_on_profile()
     ]
     check_apps_followed_status(apps_to_do)
     check_apps_profile_status(apps_to_do)
@@ -410,8 +418,10 @@ def check_apps_followed_status(apps):
     for app in apps:
         if app.get_id() in followed_app_ids:
             app.set_followed(True)
+            followed_app_ids.remove(app.get_id())
         else:
             app.set_followed(False)
+    create_missing_followed_apps(followed_app_ids)
 
 # --- Return a list of every followed app ID using Steam API ---
 def get_followed_app_ids():
@@ -426,6 +436,16 @@ def get_followed_app_ids():
     except Exception as e:
         print(f'\033[91m\n[ERR] Steam API getFollowedGames failed: {e}\033[0m')
         return None
+
+# --- Create an App object for each missing followed app ---
+def create_missing_followed_apps(missing_followed_app_ids):
+    followed_apps = []
+    for followed_app_id in missing_followed_app_ids:
+        followed_apps.append(App(followed_app_id, price = '[UNKNOWN]', on_profile = False, owned = False, followed = True))
+        print(f'\n[DEBUG] Created followed app {followed_app_id}')
+    if len(followed_apps) > 0:
+        complete_apps_name_and_type(followed_apps)
+        check_apps_store_status(followed_apps)
 
 # --- Check the profile status of each app based on the API call GetOwnedGames ---
 def check_apps_profile_status(apps):
@@ -527,10 +547,11 @@ def complete_apps_dlcs(apps):
 def create_missing_apps_dlcs(missing_dlcs, apps_missing_dlcs):
     dlc_apps = []
     for dlc_id in missing_dlcs:
-        dlc_apps.append(App(dlc_id, price = '[UNKNOWN]', owned = False))
+        dlc_apps.append(App(dlc_id, price = '[UNKNOWN]', on_profile = False, owned = False, followed = False))
         print(f'\n[DEBUG] Created app DLC {dlc_id}')
-    complete_apps_name_and_type(dlc_apps)
-    complete_apps_status(dlc_apps)
+    if len(dlc_apps) > 0:
+        complete_apps_name_and_type(dlc_apps)
+        check_apps_store_status(dlc_apps)
     for app in apps_missing_dlcs:
         for dlc in dlc_apps:
             if dlc.get_id() in app.get_dlc_id_list():
@@ -559,25 +580,23 @@ def get_all_games(apps):
 # --- Get only the profile games and apps from app list ---
 def get_profile_games(apps):
     profile_games = []
-    valid_types = ['game', 'demo', 'beta', 'application']
     for app in apps:
-        if app.get_type().lower() in valid_types and app.is_on_profile():
+        if app.is_on_profile():
             profile_games.append(app)
     return profile_games
 
 # --- Get only the followed games and apps from app list ---
 def get_followed_games(apps):
     followed_games = []
-    valid_types = ['game', 'demo', 'beta', 'application']
     for app in apps:
-        if app.get_type().lower() in valid_types and app.is_followed():
+        if app.is_followed():
             followed_games.append(app)
     return followed_games
 
 # --- Get only apps other than games, apps and DLCs from app list ---
 def get_misc_apps(apps):
     misc = []
-    valid_types = ['game', 'demo', 'beta', 'application', 'dlc', 'music']
+    valid_types = ['game', 'demo', 'beta', 'application', 'dlc']
     for app in apps:
         if app.get_type().lower() not in valid_types and app.get_price().lower() != 'family':
             misc.append(app)
