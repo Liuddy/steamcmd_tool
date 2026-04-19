@@ -233,6 +233,7 @@ def add_to_all_apps(new_apps):
 def complete_apps_from_backlogs(apps):
     try:
         with open(BACKLOGS_FILE_PATH, encoding='utf-8') as f:
+            do_not_overwrite_status = []
             for line in f:
                 if '[DEBUG]' not in line:
                     continue
@@ -252,9 +253,11 @@ def complete_apps_from_backlogs(apps):
                 for app in apps:
                     if match_app_created and match_app_created.group(1) == app.get_id():
                         do_create_app = False
+                        do_not_overwrite_status.append(app.get_id())
                         break
                     if match_dlc_created and match_dlc_created.group(1) == app.get_id():
                         do_create_dlc = False
+                        do_not_overwrite_status.append(app.get_id())
                         break
                     if match_name_type and match_name_type.group(1) == app.get_id():
                         app.set_name(match_name_type.group(2))
@@ -266,7 +269,7 @@ def complete_apps_from_backlogs(apps):
                         app.set_dlc_id_list(array_conv)
                         print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
                         break
-                    if match_status and match_status.group(1) == app.get_id():
+                    if match_status and match_status.group(1) == app.get_id() and app.get_id() not in do_not_overwrite_status:
                         app.set_followed(match_status.group(2) == 'True')
                         app.set_on_store(match_status.group(3) == 'True')
                         app.set_on_profile(match_status.group(4) == 'True')
@@ -481,7 +484,7 @@ def get_profile_app_ids():
 def complete_apps_store_status(apps):
     apps_to_do = [app for app in apps if app.is_on_store() is None]
     for app in apps_to_do:
-        api_success = get_api_app_details_success(app.get_id())
+        api_success = get_api_app_details_success(app)
         if api_success:
             app.set_on_store(True)
         else:
@@ -492,7 +495,8 @@ def complete_apps_store_status(apps):
               f' on profile: {app.is_on_profile()}')
 
 # --- Get the success status of appdetails API call ---
-def get_api_app_details_success(app_id):
+def get_api_app_details_success(app):
+    app_id = app.get_id()
     url = f'https://store.steampowered.com/api/appdetails?appids={app_id}&cc=us&l=en'
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
@@ -509,7 +513,7 @@ def get_api_app_details_success(app_id):
             entry = data.get(app_id)
             success = entry.get('success', False)
             if success:
-                get_api_app_dlc_id(entry, app_id)
+                get_api_app_dlc_id(entry, app)
                 return True
             return False
         except Exception(BaseException):
@@ -517,19 +521,17 @@ def get_api_app_details_success(app_id):
             time.sleep(30)
 
 # --- Get the app DLC list from appdetails API call ---
-def get_api_app_dlc_id(entry, app_id):
+def get_api_app_dlc_id(entry, app):
     data = entry.get('data', None)
     if data is None:
         return
     dlcs_id = data.get('dlc', None)
     if dlcs_id is None:
         return
-    apps_to_do = [app for app in all_apps if app.get_dlc_id_list() is None]
-    for app in apps_to_do:
-        if app.get_id() == app_id:
-            app.set_dlc_id_list(dlcs_id)
-            print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
-            return
+    if app.get_dlc_id_list() is None:
+        app.set_dlc_id_list(dlcs_id)
+        print(f'\n[DEBUG] Completed app {app.get_id()}, DLCs ID list: {app.get_dlc_id_list()}')
+        return
 
 
 # --- Complete the DLC list each owned app using its DLCs ID list ---
@@ -540,11 +542,13 @@ def complete_apps_dlcs(apps):
     for app_td in apps_to_do:
         for dlc_id in app_td.get_dlc_id_list():
             existing_app = [app for app in apps if app.get_id() == dlc_id]
-            if len(existing_app) == 1:
+            if len(existing_app) == 1 and (app_td.get_dlc_list() is None or existing_app[0] not in app_td.get_dlc_list()):
                 app_td.add_dlc(existing_app[0])
-            else:
-                missing_dlcs.append(dlc_id)
-                apps_missing_dlcs.append(app_td)
+            elif len(existing_app) == 0:
+                if dlc_id not in missing_dlcs:
+                    missing_dlcs.append(dlc_id)
+                if app_td not in apps_missing_dlcs:
+                    apps_missing_dlcs.append(app_td)
     create_missing_apps_dlcs(missing_dlcs, apps_missing_dlcs)
     print('\033[92m\n[INFO] Completed apps DLCs.\033[0m')
 
@@ -598,12 +602,12 @@ def get_followed_games(apps):
             followed_games.append(app)
     return followed_games
 
-# --- Get only apps other than games, apps and DLCs from app list ---
+# --- Get only owned apps other than games, apps and DLCs from app list ---
 def get_misc_apps(apps):
     misc = []
     valid_types = ['game', 'demo', 'beta', 'application', 'dlc']
     for app in apps:
-        if app.get_type().lower() not in valid_types and app.get_price().lower() != 'family':
+        if app.get_type().lower() not in valid_types and app.is_owned():
             misc.append(app)
     return misc
 
@@ -629,17 +633,18 @@ def export_to_csv(apps, file_path):
     with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow(['ID', 'Name', 'Type', 'Price', 'Store', 'Profile', 'Owned', 'Followed', 'DLC'])
-        writer.writerows([[
-            app.get_id(),
-            app.get_name(),
-            app.get_type(),
-            app.get_price(),
-            'Available' if app.is_on_store() else 'Not available',
-            'Showing' if app.is_on_profile() else 'Not showing',
-            'Owned' if app.is_owned() else 'Not owned',
-            'Followed' if app.is_followed() else 'Not followed',
-            app.get_dlc_id_list() if app.get_dlc_id_list() else 'No DLC'
-        ] for app in apps])
+        for app in apps:
+            writer.writerow([
+                app.get_id(),
+                app.get_name(),
+                app.get_type(),
+                app.get_price(),
+                'Available' if app.is_on_store() else 'Not available',
+                'Showing' if app.is_on_profile() else 'Not showing',
+                'Owned' if app.is_owned() else 'Not owned',
+                'Followed' if app.is_followed() else 'Not followed',
+                app.get_dlc_id_list() if app.get_dlc_id_list() else 'No DLC'
+            ])
     print(f'\033[92m\n[INFO] CSV export done: {file_path}, {len(apps)} apps exported.\033[0m')
 
 
