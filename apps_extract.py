@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 # --- Preliminary steps ---
 # Connect to Steam and extract every license you own with the following command line
 # (replace "username" with yours and change steamcmd.exe path if needed):
-# C:\steamcmd\steamcmd.exe +login username +licenses_print +quit > licenses.txt
+# C:\SteamCMD\steamcmd.exe +login username +licenses_print +quit > licenses.txt
 
 load_dotenv(override=True)
 
