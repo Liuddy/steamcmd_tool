@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 CMD_LINE_BATCH = 400                                                # To avoid Windows command line maximum char limit
-CMD_LINE_DELAY = 300                                                # To wait for SteamCMD output
+CMD_LINE_DELAY = 600                                                # To wait for SteamCMD output
 API_CALLS_LIMIT = 200                                               # The Steam API max calls (200 requests)
 API_CALLS_TIMEOUT = 300                                             # The Steam API timeout (300s = 5min)
 API_CALLS_DELAY = API_CALLS_TIMEOUT / API_CALLS_LIMIT + 0.1         # To avoid Steam API calls rate-limit
