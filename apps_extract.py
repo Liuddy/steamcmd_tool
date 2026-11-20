@@ -172,7 +172,7 @@ class App:
 def make_app_list():
     apps = []
     saved_apps = {}
-    with open(LICENSES_FILE_PATH, encoding='utf-8') as f:
+    with open(LICENSES_FILE_PATH, encoding='utf-16') as f:
         app_price = None
         for line in f:
             # The state line always precede the appID line in licenses file
